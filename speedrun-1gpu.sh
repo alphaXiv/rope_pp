@@ -4,6 +4,9 @@ set -x
 # Create necessary directories
 mkdir -p checkpoints logs results wandb
 
+# Experiment name used for checkpoints and logs
+EXPERIMENT_NAME="rope_pp-376m-4k-imag2-single-gpu"
+
 export WANDB_RUN_GROUP="rope_pp-376m-single-gpu"
 
 # Stage 1: Initial training for 100k steps
@@ -11,14 +14,14 @@ echo "=========================================="
 echo "Starting Stage 1: Initial Training"
 echo "=========================================="
 
-python train_rope_pp_single_gpu.py \
+python single-gpu/train_rope_pp_single_gpu.py \
   --config_abbr '376m' \
   --imag \
   --imag_mode 'imag2' \
-  --save_abbr 'rope_pp-376m-4k-imag2-single-gpu' \
-  > logs/rope_pp-376m-4k-imag2-single-gpu.log 2>&1
+  --save_abbr "$EXPERIMENT_NAME" \
+  > logs/${EXPERIMENT_NAME}.log 2>&1
 
-echo "Stage 1 complete! Check logs/rope_pp-376m-4k-imag2-single-gpu.log"
+echo "Stage 1 complete! Check logs/${EXPERIMENT_NAME}.log"
 
 # Wait for stage 1 to complete
 wait
@@ -28,22 +31,41 @@ echo "=========================================="
 echo "Starting Stage 2: Learning Rate Decay"
 echo "=========================================="
 
-python train_rope_pp-decay_single_gpu.py \
+python single-gpu/train_rope_pp-decay_single_gpu.py \
   --config_abbr '376m' \
   --imag \
   --imag_mode 'imag2' \
-  --save_abbr 'rope_pp-376m-4k-imag2-single-gpu' \
+  --save_abbr "rope_pp-376m-4k-imag2-single-gpu" \
   --load_ckpt 90000 \
   --decay_step 10000 \
   > logs/rope_pp-376m-4k-imag2-single-gpu-ckpt90000-decay.log 2>&1
 
-echo "Stage 2 complete! Check logs/rope_pp-376m-4k-imag2-single-gpu-ckpt90000-decay.log"
+echo "Stage 2 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
+
+# Wait for stage 2 to complete
+wait
+
+# Stage 3: Long context training from checkpoint 10000
+echo "=========================================="
+echo "Starting Stage 3: Long Context Training"
+echo "=========================================="
+
+python single-gpu/train_rope_pp-lctx_single_gpu.py \
+  --config_abbr '376m' \
+  --imag \
+  --imag_mode 'imag2' \
+  --save_abbr "${EXPERIMENT_NAME}-ckpt90000-decay" \
+  --load_ckpt 10000 \
+  > logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log 2>&1
+
+echo "Stage 3 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"
 
 echo "=========================================="
 echo "Training Complete!"
 echo "=========================================="
-echo "Final model saved at: checkpoints/rope_pp-376m-4k-imag2-single-gpu-ckpt90000-decay"
+echo "Final model saved at: checkpoints/${EXPERIMENT_NAME}-ckpt90000-decay-lctx"
 echo ""
 echo "To monitor training progress, run:"
-echo "  tail -f logs/rope_pp-376m-4k-imag2-single-gpu.log"
-echo "  tail -f logs/rope_pp-376m-4k-imag2-single-gpu-ckpt90000-decay.log"
+echo "  tail -f logs/${EXPERIMENT_NAME}.log"
+echo "  tail -f logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
+echo "  tail -f logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"

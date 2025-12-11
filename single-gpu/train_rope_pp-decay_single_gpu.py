@@ -4,8 +4,8 @@ import json
 import random
 from datetime import datetime
 
-# Add the current directory to sys.path to allow imports from sibling directories
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add the parent directory to sys.path to allow imports from sibling directories
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import numpy as np
@@ -30,9 +30,10 @@ cache_dir = ''  # set a cache_dir
 train_dataset_hf_id = 'mlfoundations/dclm-baseline-1.0'  # Hugging Face dataset ID
 train_dataset_label = 'text'
 
-valid_dataset_hf_id = 'EleutherAI/pile'  # Hugging Face dataset ID
+valid_dataset_hf_id = 'wikitext'  # Hugging Face dataset ID
+valid_dataset_name = 'wikitext-2-raw-v1'  # Subset name
 valid_dataset_split = 'validation'
-valid_dataset_abbr = 'pile'
+valid_dataset_abbr = 'wikitext'
 valid_dataset_label = 'text'
 
 seed = 42
@@ -137,10 +138,10 @@ tokenizer.pad_token_id = tokenizer.eos_token_id
 print('tokenizer is ready !', '\n')
 
 # Load validation dataset from Hugging Face Hub
-print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}', '\n')
+print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}/{valid_dataset_name}', '\n')
 
-valid_dataset = datasets.load_dataset(valid_dataset_hf_id, split=valid_dataset_split, 
-                                      cache_dir=cache_dir, trust_remote_code=True)
+valid_dataset = datasets.load_dataset(valid_dataset_hf_id, valid_dataset_name, split=valid_dataset_split, 
+                                      cache_dir=cache_dir)
 valid_dataset = valid_dataset.select(range(min(valid_size, len(valid_dataset))))
 
 print(valid_dataset, '\n')
@@ -157,8 +158,7 @@ train_dataset = StreamingTrainingHuggingFace(
     seed=seed,
     split='train',
     streaming=True,
-    cache_dir=cache_dir,
-    dataset_ckpt_path=load_path
+    cache_dir=cache_dir
 )
 
 valid_dataset = EvaluatingDataset(dataset=valid_dataset, tokenizer=tokenizer, 
