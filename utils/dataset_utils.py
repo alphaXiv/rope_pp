@@ -210,3 +210,93 @@ class EvaluatingDataset(torch.utils.data.Dataset):
         inputs.update({'labels': inputs['input_ids']})
 
         return inputs
+
+
+class StreamingTrainingHuggingFace(torch.utils.data.Dataset):
+    """
+    Streaming dataset that loads from Hugging Face Hub and processes
+    samples similar to StreamingTrainingJsonlZSD.
+    """
+    
+    def __init__(self, dataset_id, tokenizer, label_name, train_length=4096, 
+                 min_length=512, num_data=-1, seed=42, split='train', 
+                 streaming=True, cache_dir=None):
+        
+        from datasets import load_dataset
+        
+        self.tokenizer = tokenizer
+        self.label_name = label_name
+        
+        self.len = num_data
+        self.train_length = train_length 
+        self.min_length = min_length
+        
+        # Load dataset from Hugging Face
+        self.dataset = load_dataset(
+            dataset_id, 
+            split=split,
+            streaming=streaming,
+            cache_dir=cache_dir,
+            trust_remote_code=True
+        )
+        
+        # Shuffle if streaming
+        if streaming:
+            self.dataset = self.dataset.shuffle(seed=seed, buffer_size=10000)
+        
+        # Get distributed training info
+        if torch.distributed.is_initialized():
+            self.rank = torch.distributed.get_rank()
+            self.world_size = torch.distributed.get_world_size()
+            # Shard the dataset for distributed training
+            if streaming:
+                self.dataset = self.dataset.skip(self.rank).take(num_data)
+        else:
+            self.rank = 0
+            self.world_size = 1
+        
+        self.dataset_iter = iter(self.dataset)
+        self.token_buffer = []
+        
+    def __len__(self):
+        return self.len
+    
+    def __getitem__(self, _):
+        
+        if len(self.token_buffer) > self.train_length:
+            input_ids = torch.tensor(self.token_buffer[:self.train_length]).long()
+            position_ids = torch.tensor(list(range(self.train_length))).long()
+            self.token_buffer = self.token_buffer[self.train_length:]
+        
+        else:
+            input_ids = self.token_buffer if len(self.token_buffer) < self.min_length else []
+            position_ids = list(range(self.train_length)) if len(self.token_buffer) < self.min_length else []
+            
+            while len(input_ids) < self.train_length:
+                try:
+                    sample = next(self.dataset_iter)
+                except StopIteration:
+                    # Reset iterator if we reach the end
+                    self.dataset_iter = iter(self.dataset)
+                    sample = next(self.dataset_iter)
+                
+                # Extract text from sample
+                text = sample[self.label_name]
+                
+                # Tokenize
+                extended_input_ids = self.tokenizer(text, truncation=False)['input_ids']
+                extended_position_ids = list(range(len(extended_input_ids)))
+                
+                # Skip if too short
+                if len(extended_input_ids) < self.min_length:
+                    continue
+                
+                input_ids = input_ids + extended_input_ids
+                position_ids = position_ids + extended_position_ids
+            
+            self.token_buffer = input_ids[self.train_length:]
+            input_ids = torch.tensor(input_ids[:self.train_length]).long()
+            position_ids = torch.tensor(position_ids[:self.train_length]).long()
+        
+        return {'input_ids': input_ids, 'labels': input_ids, 'position_ids': position_ids}
+

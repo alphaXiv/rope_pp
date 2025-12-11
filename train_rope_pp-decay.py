@@ -15,10 +15,10 @@ from transformers import AutoTokenizer
 from transformers import Trainer, TrainingArguments
 from transformers.integrations import HfDeepSpeedConfig
 
-from models.configuration_llama import LlamaConfig
-from models.modeling_llama_rope_pp import LlamaForCausalLM
+from rope_pp.configuration_llama import LlamaConfig
+from rope_pp.modeling_llama_rope_pp import LlamaForCausalLM
 
-from utils.dataset_utils import StreamingTrainingJsonlZSD, EvaluatingDataset
+from utils.dataset_utils import StreamingTrainingJsonlZSD, StreamingTrainingHuggingFace, EvaluatingDataset
 from utils.callback_utils import CheckpointingCallback, CustomLoggingCallback
 from utils.trainer_utils import TrainerWithDatasetCheckpointing
 
@@ -27,13 +27,13 @@ tokenizer_path = 'meta-llama/Meta-Llama-3-8B'
 
 cache_dir = ''  # set a cache_dir
 
-train_dataset_path = ''  # path of mlfoundations/dclm-baseline-1.0
+train_dataset_hf_id = 'mlfoundations/dclm-baseline-1.0'  # Hugging Face dataset ID
 train_dataset_label = 'text'
 
-valid_dataset_path = ''  # path of Pile-CC
+valid_dataset_hf_id = 'EleutherAI/pile'  # Hugging Face dataset ID
 valid_dataset_split = 'validation'
-valid_dataset_abbr = 'pile_cc'
-valid_dataset_label = 'content'
+valid_dataset_abbr = 'pile'
+valid_dataset_label = 'text'
 
 seed = 42
 torch.manual_seed(seed)
@@ -161,17 +161,33 @@ tokenizer.pad_token_id = tokenizer.eos_token_id
 if rank == 0:
     print('tokenizer is ready !', '\n')
 
-valid_dataset = datasets.load_dataset(valid_dataset_path, split=valid_dataset_split, 
-                                      cache_dir=cache_dir)
+# Load validation dataset from Hugging Face Hub
+if rank == 0:
+    print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}', '\n')
+
+valid_dataset = datasets.load_dataset(valid_dataset_hf_id, split=valid_dataset_split, 
+                                      cache_dir=cache_dir, trust_remote_code=True)
 valid_dataset = valid_dataset.select(range(valid_size))
 
 if rank == 0:
     print(valid_dataset, '\n')
 
-train_dataset = StreamingTrainingJsonlZSD(data_root=train_dataset_path, tokenizer=tokenizer, 
-                                          label_name=train_dataset_label, train_length=max_length, 
-                                          num_data=max_steps * batch_size, seed=seed, 
-                                          dataset_ckpt_path=load_path)
+# Load training dataset from Hugging Face Hub
+if rank == 0:
+    print(f'Loading training dataset from Hugging Face: {train_dataset_hf_id}', '\n')
+
+train_dataset = StreamingTrainingHuggingFace(
+    dataset_id=train_dataset_hf_id, 
+    tokenizer=tokenizer, 
+    label_name=train_dataset_label, 
+    train_length=max_length, 
+    num_data=max_steps * batch_size, 
+    seed=seed,
+    split='train',
+    streaming=True,
+    cache_dir=cache_dir,
+    dataset_ckpt_path=load_path
+)
 valid_dataset = EvaluatingDataset(dataset=valid_dataset, tokenizer=tokenizer, 
                                   label_name=valid_dataset_label, valid_length=max_length)
 

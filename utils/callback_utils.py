@@ -20,7 +20,11 @@ class CustomLoggingCallback(TrainerCallback):
         self.valid_dataset_abbr = valid_dataset_abbr
         self.logging_steps = logging_steps
 
-        self.rank = torch.distributed.get_rank()
+        # Handle both distributed and single GPU training
+        if torch.distributed.is_initialized():
+            self.rank = torch.distributed.get_rank()
+        else:
+            self.rank = 0
 
     def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
         now = datetime.now()
@@ -73,7 +77,11 @@ class CheckpointingCallback(TrainerCallback):
     def __init__(self, steps_to_save):
         self.steps_to_save = steps_to_save
 
-        self.rank = torch.distributed.get_rank()
+        # Handle both distributed and single GPU training
+        if torch.distributed.is_initialized():
+            self.rank = torch.distributed.get_rank()
+        else:
+            self.rank = 0
 
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.global_step in self.steps_to_save:

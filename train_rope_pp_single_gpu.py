@@ -4,16 +4,16 @@ import json
 import random
 from datetime import datetime
 
+# Add the current directory to sys.path to allow imports from sibling directories
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import torch
 import numpy as np
 
 import datasets
 
-import deepspeed
-
 from transformers import AutoTokenizer
 from transformers import Trainer, TrainingArguments
-from transformers.integrations import HfDeepSpeedConfig
 
 from rope_pp.configuration_llama import LlamaConfig
 from rope_pp.modeling_llama_rope_pp import LlamaForCausalLM
@@ -30,9 +30,10 @@ cache_dir = ''  # set a cache_dir
 train_dataset_hf_id = 'mlfoundations/dclm-baseline-1.0'  # Hugging Face dataset ID
 train_dataset_label = 'text'
 
-valid_dataset_hf_id = 'EleutherAI/pile'  # Hugging Face dataset ID
+valid_dataset_hf_id = 'wikitext'  # Hugging Face dataset ID
+valid_dataset_name = 'wikitext-2-raw-v1'  # Subset name
 valid_dataset_split = 'validation'
-valid_dataset_abbr = 'pile'
+valid_dataset_abbr = 'wikitext'
 valid_dataset_label = 'text'
 
 seed = 42
@@ -57,8 +58,6 @@ parser.add_argument('--imag_mode', choices=['imag1', 'imag2', ], default='imag1'
 parser.add_argument('--config_abbr', type=str, default='376m')
 parser.add_argument('--save_abbr', type=str, default='376m')
 
-parser.add_argument('--local_rank', type=int, default=-1)
-
 args = parser.parse_args()
 
 rope_config = {
@@ -71,64 +70,39 @@ config_path = f'{root}/configs/rope-{config_abbr}-config.json'
 
 save_abbr = args.save_abbr
 
-gradient_accumulation_steps = 1
+# MODIFIED FOR SINGLE GPU - Optimized for 40GB A100
+batch_size = 2  # Very small batch to fit in memory
+gradient_accumulation_steps = 64  # Simulate effective batch size of 128
 
-batch_size = 128
-max_length = 4096
-valid_size = 16384
+max_length = 4096  # If still OOM, try 2048 or 3072
+valid_size = 4096  # Reduced validation size
 
 max_steps = 100000
-eval_steps = 500
-warmup_steps = 500
+eval_steps = 10
+warmup_steps = 10
 
 save_steps = 10000
-steps_to_save = [100, max_steps]
+steps_to_save = [2, max_steps]
 
-# ref: https://www.deepspeed.ai/docs/config-json/
+# Load config and create model (NO DEEPSPEED)
+config = LlamaConfig.from_pretrained(config_path)
+config.gradient_checkpointing = True  # CRITICAL for memory
+config.use_cache = False  # Required for gradient checkpointing
+config._attn_implementation = "flash_attention_2"
+config.torch_dtype = torch.bfloat16
+config.rope_config = rope_config
+config.ignore_index = config.eos_token_id
 
-ds_config = {
-    "bf16": {
-        "enabled": True
-    },
-    "zero_allow_untested_optimizer": True,
-    "zero_force_ds_cpu_optimizer": False,
-    "zero_optimization": {
-        "stage": 3,
-        "overlap_comm": True,
-        "contiguous_gradients": True,
-        "sub_group_size": 1e7,
-        "stage3_max_live_parameters": 1e7,
-        "stage3_max_reuse_distance": 1e7,
-        "stage3_gather_16bit_weights_on_model_save": True
-    },
-    "gradient_accumulation_steps": 1,
-    "steps_per_print": 100,
-    "train_batch_size": batch_size,
-    "wall_clock_breakdown": False, 
-}
+model = LlamaForCausalLM(config=config)
 
-dschf = HfDeepSpeedConfig(ds_config)
-
-# ref: https://github.com/microsoft/DeepSpeed/blob/master/deepspeed/runtime/zero/partition_parameters.py#L603
-
-with deepspeed.zero.Init(dtype=torch.bfloat16, config_dict_or_path=ds_config):
-
-    config = LlamaConfig.from_pretrained(config_path)
-    config.gradient_checkpointing = True
-    config.use_cache = False
-    config._attn_implementation = "flash_attention_2"
-    config.torch_dtype = torch.bfloat16
-    config.rope_config = rope_config
-    config.ignore_index = config.eos_token_id
-
-    model = LlamaForCausalLM(config=config)
-
-rank = torch.distributed.get_rank()
-size = torch.distributed.get_world_size()
+# Move to GPU and enable gradient checkpointing
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+model.gradient_checkpointing_enable()  # Explicitly enable gradient checkpointing
 
 train_args = {
-    'per_device_train_batch_size': batch_size // size, 
-    'per_device_eval_batch_size': batch_size // size, 
+    'per_device_train_batch_size': batch_size, 
+    'per_device_eval_batch_size': 1,  # Use batch size of 1 for eval to save memory
     'do_train': True, 'do_eval': True, 'bf16': True, 'bf16_full_eval': True, 
     'optim': 'adamw_torch', 'learning_rate': 5e-4, 'weight_decay': 0.1, 
     'adam_beta1': 0.95, 'adam_beta2': 0.99, 'num_train_epochs': 1, 
@@ -139,43 +113,41 @@ train_args = {
     'logging_strategy': 'steps', 'logging_steps': 1, 
     'save_strategy': 'steps', 'save_steps': save_steps, 
     'gradient_accumulation_steps': gradient_accumulation_steps, 
-    'max_steps': max_steps, 'disable_tqdm': True, 'save_only_model': True, 
+    'max_steps': max_steps, 'disable_tqdm': True, 'save_only_model': True,
+    'dataloader_num_workers': 2,  # Reduced workers to save memory
+    'dataloader_pin_memory': False,  # Disable pin memory to save RAM
+    'max_grad_norm': 1.0,  # Gradient clipping
 }
 
-if rank == 0:
-    print(f'{config = }', '\n')
-    print('train_args = ', json.dumps(train_args, indent=2), '\n')
-    print('model is ready !', '\n')
-    print('save ckpt at', sorted(list(range(0, max_steps, save_steps))[1:] + steps_to_save),'\n')
+print(f'{config = }', '\n')
+print('train_args = ', json.dumps(train_args, indent=2), '\n')
+print('model is ready !', '\n')
+print('save ckpt at', sorted(list(range(0, max_steps, save_steps))[1:] + steps_to_save),'\n')
 
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=False)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
-if rank == 0:
-    print('tokenizer is ready !', '\n')
+print('tokenizer is ready !', '\n')
 
 # Load validation dataset from Hugging Face Hub
-if rank == 0:
-    print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}', '\n')
+print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}/{valid_dataset_name}', '\n')
 
-valid_dataset = datasets.load_dataset(valid_dataset_hf_id, split=valid_dataset_split, 
-                                      cache_dir=cache_dir, trust_remote_code=True)
-valid_dataset = valid_dataset.select(range(valid_size))
+valid_dataset = datasets.load_dataset(valid_dataset_hf_id, valid_dataset_name, split=valid_dataset_split, 
+                                      cache_dir=cache_dir)
+valid_dataset = valid_dataset.select(range(min(valid_size, len(valid_dataset))))
 
-if rank == 0:
-    print(valid_dataset, '\n')
+print(valid_dataset, '\n')
 
 # Load training dataset from Hugging Face Hub
-if rank == 0:
-    print(f'Loading training dataset from Hugging Face: {train_dataset_hf_id}', '\n')
+print(f'Loading training dataset from Hugging Face: {train_dataset_hf_id}', '\n')
 
 train_dataset = StreamingTrainingHuggingFace(
     dataset_id=train_dataset_hf_id, 
     tokenizer=tokenizer, 
     label_name=train_dataset_label, 
     train_length=max_length, 
-    num_data=max_steps * batch_size, 
+    num_data=max_steps * batch_size * gradient_accumulation_steps, 
     seed=seed,
     split='train',
     streaming=True,
@@ -185,10 +157,7 @@ train_dataset = StreamingTrainingHuggingFace(
 valid_dataset = EvaluatingDataset(dataset=valid_dataset, tokenizer=tokenizer, 
                                   label_name=valid_dataset_label, valid_length=max_length)
 
-if rank == 0:
-    print('dataset is ready !', '\n')
-
-# ref: https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments
+print('dataset is ready !', '\n')
 
 os.environ["WANDB_MODE"] = "offline"
 os.environ["WANDB_PROJECT"] = "rope_pp"
@@ -196,12 +165,11 @@ os.environ["WANDB_DIR"] = f"{root}/wandb"
 
 training_args = TrainingArguments(
     report_to='wandb', logging_dir=f'{root}/wandb',
-    run_name=f'{save_abbr}-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
-    include_for_metrics='loss', deepspeed=ds_config, **train_args
+    run_name=f'{save_abbr}-single-gpu-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
+    include_for_metrics='loss', **train_args
 )
 
-if rank == 0:
-    print('checkpoints and model will be saved in', train_args['output_dir'], '\n')
+print('checkpoints and model will be saved in', train_args['output_dir'], '\n')
 
 start_time = datetime.now()
 
@@ -209,8 +177,11 @@ trainer = TrainerWithDatasetCheckpointing(
     model=model, tokenizer=tokenizer, args=training_args,
     train_dataset=train_dataset, eval_dataset={valid_dataset_abbr: valid_dataset}, 
     callbacks=[CheckpointingCallback(steps_to_save=steps_to_save), 
-               CustomLoggingCallback(max_steps=max_steps, batch_size=batch_size, max_length=max_length, 
-                                     world_size=size, valid_dataset_abbr=valid_dataset_abbr, 
+               CustomLoggingCallback(max_steps=max_steps, 
+                                     batch_size=batch_size * gradient_accumulation_steps, 
+                                     max_length=max_length, 
+                                     world_size=1, 
+                                     valid_dataset_abbr=valid_dataset_abbr, 
                                      logging_steps=20)
                 ], 
 )
@@ -219,8 +190,7 @@ trainer.can_return_loss = True
 
 trainer.train()
 
-if rank == 0:
-    end_time = datetime.now()
-    total_time = end_time - start_time
-    print(f"[{str(end_time)}] 100.00% {max_steps} / {max_steps} [{str(total_time)} / {str(total_time)}]")
-    print('training is over !')
+end_time = datetime.now()
+total_time = end_time - start_time
+print(f"[{str(end_time)}] 100.00% {max_steps} / {max_steps} [{str(total_time)} / {str(total_time)}]")
+print('training is over !')
