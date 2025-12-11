@@ -75,7 +75,7 @@ load_path = f'{root}/checkpoints/{save_abbr}/checkpoint-{load_ckpt}'
 save_path = f'{root}/checkpoints/{save_abbr}-lctx'
 
 # MODIFIED FOR SINGLE GPU - Optimized for 40GB A100
-batch_size = 2  # Very small batch to fit in memory
+batch_size = 1  # Very small batch to fit in memory
 gradient_accumulation_steps = 8  # Simulate effective batch size of 16
 
 max_length = 32768
