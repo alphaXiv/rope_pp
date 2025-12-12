@@ -82,7 +82,7 @@ max_length = 4096  # If still OOM, try 2048 or 3072
 valid_size = 4096  # Reduced validation size
 
 max_steps = 100000
-eval_steps = 1
+eval_steps = 500
 warmup_steps = 10
 
 save_steps = 10000
@@ -195,36 +195,6 @@ from transformers.trainer_callback import PrinterCallback
 trainer.remove_callback(PrinterCallback)
 
 trainer.can_return_loss = True
-
-# Pre-training evaluation check to debug eval loss issues
-print("\n" + "="*60)
-print("Running pre-training evaluation check...")
-print("="*60)
-model.eval()
-eval_dataloader = trainer.get_eval_dataloader(trainer.eval_dataset[valid_dataset_abbr])
-batch = next(iter(eval_dataloader))
-batch = {k: v.to(model.device) for k, v in batch.items()}
-
-print(f"Batch keys: {batch.keys()}")
-print(f"Input shape: {batch['input_ids'].shape}")
-if 'labels' in batch:
-    print(f"Labels shape: {batch['labels'].shape}")
-    print(f"Labels min/max: {batch['labels'].min()}/{batch['labels'].max()}")
-
-with torch.no_grad():
-    outputs = model(**batch)
-    print(f"\nEval Loss: {outputs.loss}")
-    print(f"Loss is NaN: {torch.isnan(outputs.loss)}")
-    print(f"Loss is Inf: {torch.isinf(outputs.loss)}")
-    print(f"Logits shape: {outputs.logits.shape}")
-    print(f"Logits has NaN: {torch.isnan(outputs.logits).any()}")
-    print(f"Logits has Inf: {torch.isinf(outputs.logits).any()}")
-    print(f"Logits min/max: {outputs.logits.min()}/{outputs.logits.max()}")
-
-print("="*60)
-print("Starting training...\n")
-model.train()
-
 trainer.train()
 
 end_time = datetime.now()

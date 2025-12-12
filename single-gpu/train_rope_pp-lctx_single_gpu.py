@@ -146,6 +146,7 @@ print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}/{val
 
 valid_dataset = datasets.load_dataset(valid_dataset_hf_id, valid_dataset_name, split=valid_dataset_split, 
                                       cache_dir=cache_dir)
+valid_dataset = valid_dataset.filter(lambda x: len(x[valid_dataset_label].strip()) > 50)
 valid_dataset = valid_dataset.select(range(min(valid_size, len(valid_dataset))))
 
 print(valid_dataset, '\n')
