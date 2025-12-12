@@ -236,8 +236,7 @@ class StreamingTrainingHuggingFace(torch.utils.data.Dataset):
             dataset_id, 
             split=split,
             streaming=streaming,
-            cache_dir=cache_dir,
-            trust_remote_code=True
+            cache_dir=cache_dir
         )
         
         # Shuffle if streaming
