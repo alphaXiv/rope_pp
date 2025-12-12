@@ -47,8 +47,7 @@ deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
   --config_abbr '376m' \
   --imag \
   --imag_mode 'imag2' \
-  --save_abbr "$EXPERIMENT_NAME" \
-  > logs/${EXPERIMENT_NAME}.log 2>&1
+  --save_abbr "$EXPERIMENT_NAME"
 
 echo "Stage 1 complete! Check logs/${EXPERIMENT_NAME}.log"
 
@@ -67,8 +66,7 @@ deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
   --imag_mode 'imag2' \
   --save_abbr "$EXPERIMENT_NAME" \
   --load_ckpt 90000 \
-  --decay_step 10000 \
-  > logs/${EXPERIMENT_NAME}-ckpt90000-decay.log 2>&1
+  --decay_step 10000
 
 echo "Stage 2 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
 
@@ -86,8 +84,7 @@ deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
   --imag \
   --imag_mode 'imag2' \
   --save_abbr "${EXPERIMENT_NAME}-ckpt90000-decay" \
-  --load_ckpt 10000 \
-  > logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log 2>&1
+  --load_ckpt 10000
 
 echo "Stage 3 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"
 

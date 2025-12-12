@@ -79,9 +79,9 @@ save_path = f'{root}/checkpoints/{save_abbr}-ckpt{load_ckpt}-decay'
 
 gradient_accumulation_steps = 1
 
-batch_size = 128
+batch_size = 64  # Reduced from 128 to avoid OOM
 max_length = 4096
-valid_size = 16384
+valid_size = 4096  # Reduced to avoid OOM during evaluation
 
 max_steps = args.decay_step
 eval_steps = 500
@@ -105,7 +105,9 @@ ds_config = {
         "sub_group_size": 1e7,
         "stage3_max_live_parameters": 1e7,
         "stage3_max_reuse_distance": 1e7,
-        "stage3_gather_16bit_weights_on_model_save": True
+        "stage3_gather_16bit_weights_on_model_save": True,
+        "stage3_prefetch_bucket_size": 5e7,  # Reduce prefetch to save memory
+        "stage3_param_persistence_threshold": 1e5,  # Reduce persistence threshold
     },
     "gradient_accumulation_steps": 1,
     "steps_per_print": 100,
@@ -134,7 +136,7 @@ size = torch.distributed.get_world_size()
 
 train_args = {
     'per_device_train_batch_size': batch_size // size, 
-    'per_device_eval_batch_size': batch_size // size, 
+    'per_device_eval_batch_size': 1,  # Use batch size of 1 for eval to save memory
     'do_train': True, 'do_eval': True, 'bf16': True, 'bf16_full_eval': True, 
     'optim': 'adamw_torch', 'learning_rate': 5e-4, 'weight_decay': 0.1, 
     'adam_beta1': 0.95, 'adam_beta2': 0.99, 'num_train_epochs': 1, 
@@ -168,8 +170,9 @@ if rank == 0:
 
 valid_dataset = datasets.load_dataset(valid_dataset_hf_id, valid_dataset_name, split=valid_dataset_split, 
                                       cache_dir=cache_dir)
+# wikitext has a lot of empty lines -> causes NaNs                                      
 valid_dataset = valid_dataset.filter(lambda x: len(x[valid_dataset_label].strip()) > 50)
-valid_dataset = valid_dataset.select(range(valid_size))
+valid_dataset = valid_dataset.select(range(min(valid_size, len(valid_dataset))))
 
 if rank == 0:
     print(valid_dataset, '\n')
@@ -219,12 +222,14 @@ trainer = TrainerWithDatasetCheckpointing(
     callbacks=[CheckpointingCallback(steps_to_save=steps_to_save), 
                CustomLoggingCallback(max_steps=max_steps, batch_size=batch_size, max_length=max_length, 
                                      world_size=size, valid_dataset_abbr=valid_dataset_abbr, 
-                                     logging_steps=20)
+                                     logging_steps=1)
                 ], 
 )
 
-trainer.can_return_loss = True
+from transformers.trainer_callback import PrinterCallback
+trainer.remove_callback(PrinterCallback)
 
+trainer.can_return_loss = True
 trainer.train()
 
 if rank == 0:

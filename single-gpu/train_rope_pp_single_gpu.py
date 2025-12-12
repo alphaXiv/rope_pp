@@ -75,7 +75,7 @@ config_path = f'{root}/configs/rope-{config_abbr}-config.json'
 save_abbr = args.save_abbr
 
 # MODIFIED FOR SINGLE GPU - Optimized for 40GB A100
-batch_size = 2  # Very small batch to fit in memory
+batch_size = 6  # Very small batch to fit in memory
 gradient_accumulation_steps = 64  # Simulate effective batch size of 128
 
 max_length = 4096  # If still OOM, try 2048 or 3072
