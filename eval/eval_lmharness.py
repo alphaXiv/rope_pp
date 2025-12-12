@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Evaluation script for RoPE++ and FoPE models using lm-evaluation-harness.
-Evaluates models on multiple reasoning and QA tasks without requiring opencompass integration.
 
 Supports:
 - RoPE++ models (with various rope configurations)
