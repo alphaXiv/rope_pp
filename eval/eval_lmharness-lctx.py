@@ -21,11 +21,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "lm-evaluation-harness"))
 
-from rope_pp.configuration_llama import LlamaConfig
-from rope_pp.modeling_llama_rope_pp import LlamaForCausalLM as RoPEPPLlamaForCausalLM
-from rope_pp.modeling_llama_fope import LlamaForCausalLM as FoPELlamaForCausalLM
-from rope_pp.modeling_llama_pythia import LlamaForCausalLM as PythiaLlamaForCausalLM
-from rope_pp.modeling_llama_alibi import LlamaForCausalLM as AlibiLlamaForCausalLM
+from llama_variants.configuration_llama import LlamaConfig
+from llama_variants.modeling_llama_rope_pp import LlamaForCausalLM as RoPEPPLlamaForCausalLM
+from llama_variants.modeling_llama_fope import LlamaForCausalLM as FoPELlamaForCausalLM
+from llama_variants.modeling_llama_pythia import LlamaForCausalLM as PythiaLlamaForCausalLM
+from llama_variants.modeling_llama_alibi import LlamaForCausalLM as AlibiLlamaForCausalLM
 from transformers import AutoTokenizer
 
 from lm_eval import simple_evaluate

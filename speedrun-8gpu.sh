@@ -43,7 +43,7 @@ echo "Starting Stage 1: Initial Training"
 echo "=========================================="
 
 deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
-  train_rope_pp.py \
+  multi-gpu/train_rope_pp.py \
   --config_abbr '376m' \
   --imag \
   --imag_mode 'imag2' \
@@ -60,7 +60,7 @@ echo "Starting Stage 2: Learning Rate Decay"
 echo "=========================================="
 
 deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
-  train_rope_pp-decay.py \
+  multi-gpu/train_rope_pp-decay.py \
   --config_abbr '376m' \
   --imag \
   --imag_mode 'imag2' \
@@ -79,7 +79,7 @@ echo "Starting Stage 3: Long Context Training"
 echo "=========================================="
 
 deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
-  train_rope_pp-lctx.py \
+  multi-gpu/train_rope_pp-lctx.py \
   --config_abbr '376m' \
   --imag \
   --imag_mode 'imag2' \

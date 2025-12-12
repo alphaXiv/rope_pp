@@ -15,8 +15,8 @@ from transformers import AutoTokenizer
 from transformers import Trainer, TrainingArguments
 from transformers.integrations import HfDeepSpeedConfig
 
-from rope_pp.configuration_llama import LlamaConfig
-from rope_pp.modeling_llama_rope_pp import LlamaForCausalLM
+from llama_variants.configuration_llama import LlamaConfig
+from llama_variants.modeling_llama_rope_pp import LlamaForCausalLM
 
 from utils.dataset_utils import StreamingTrainingJsonlZSD, StreamingTrainingHuggingFace, EvaluatingDataset
 from utils.callback_utils import CheckpointingCallback, CustomLoggingCallback

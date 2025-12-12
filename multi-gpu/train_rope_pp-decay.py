@@ -15,10 +15,10 @@ from transformers import AutoTokenizer
 from transformers import Trainer, TrainingArguments
 from transformers.integrations import HfDeepSpeedConfig
 
-from rope_pp.configuration_llama import LlamaConfig
-from rope_pp.modeling_llama_rope_pp import LlamaForCausalLM
+from llama_variants.configuration_llama import LlamaConfig
+from llama_variants.modeling_llama_rope_pp import LlamaForCausalLM
 
-from utils.dataset_utils import StreamingTrainingJsonlZSD, EvaluatingDataset
+from utils.dataset_utils import StreamingTrainingJsonlZSD, StreamingTrainingHuggingFace, EvaluatingDataset
 from utils.callback_utils import CheckpointingCallback, CustomLoggingCallback
 from utils.trainer_utils import TrainerWithDatasetCheckpointing
 
@@ -27,7 +27,7 @@ tokenizer_path = 'meta-llama/Meta-Llama-3-8B'
 
 cache_dir = ''  # set a cache_dir
 
-train_dataset_path = ''  # path of mlfoundations/dclm-baseline-1.0
+train_dataset_hf_id = 'mlfoundations/dclm-baseline-1.0'  # Hugging Face dataset ID
 train_dataset_label = 'text'
 
 valid_dataset_hf_id = 'wikitext'  # Hugging Face dataset ID
@@ -58,6 +58,7 @@ parser.add_argument('--imag_mode', choices=['imag1', 'imag2', ], default='imag1'
 parser.add_argument('--config_abbr', type=str, default='376m')
 parser.add_argument('--save_abbr', type=str, default='376m')
 parser.add_argument('--load_ckpt', type=int)
+parser.add_argument('--decay_step', type=int)
 
 parser.add_argument('--local_rank', type=int, default=-1)
 
@@ -74,17 +75,17 @@ config_path = f'{root}/configs/rope-{config_abbr}-config.json'
 save_abbr = args.save_abbr
 load_ckpt = args.load_ckpt
 load_path = f'{root}/checkpoints/{save_abbr}/checkpoint-{load_ckpt}'
-save_path = f'{root}/checkpoints/{save_abbr}-lctx'
+save_path = f'{root}/checkpoints/{save_abbr}-ckpt{load_ckpt}-decay'
 
 gradient_accumulation_steps = 1
 
-batch_size = 16
-max_length = 32768
+batch_size = 64  # Reduced from 128 to avoid OOM
+max_length = 4096
 valid_size = 4096  # Reduced to avoid OOM during evaluation
 
-max_steps = 10000
+max_steps = args.decay_step
 eval_steps = 500
-warmup_steps = 500
+warmup_steps = 0
 
 save_steps = 2000
 steps_to_save = [100, max_steps]
@@ -125,7 +126,6 @@ with deepspeed.zero.Init(dtype=torch.bfloat16, config_dict_or_path=ds_config):
     config.use_cache = False
     config._attn_implementation = "flash_attention_2"
     config.torch_dtype = torch.bfloat16
-    config.rope_theta = 500000
     config.rope_config = rope_config
     config.ignore_index = config.eos_token_id
 
@@ -140,7 +140,8 @@ train_args = {
     'do_train': True, 'do_eval': True, 'bf16': True, 'bf16_full_eval': True, 
     'optim': 'adamw_torch', 'learning_rate': 5e-4, 'weight_decay': 0.1, 
     'adam_beta1': 0.95, 'adam_beta2': 0.99, 'num_train_epochs': 1, 
-    'lr_scheduler_type': 'cosine', 'warmup_steps': warmup_steps,
+    'lr_scheduler_type': 'warmup_stable_decay', 'warmup_steps': 0,
+    'lr_scheduler_kwargs': {'num_decay_steps': max_steps - 1, }, 
 
     'label_names': [], 'output_dir': save_path, 
     'eval_strategy': 'steps', 'eval_steps': eval_steps, 
@@ -176,10 +177,22 @@ valid_dataset = valid_dataset.select(range(min(valid_size, len(valid_dataset))))
 if rank == 0:
     print(valid_dataset, '\n')
 
-train_dataset = StreamingTrainingJsonlZSD(data_root=train_dataset_path, tokenizer=tokenizer, 
-                                          label_name=train_dataset_label, train_length=max_length, 
-                                          num_data=max_steps * batch_size, seed=seed, 
-                                          dataset_ckpt_path=load_path)
+# Load training dataset from Hugging Face Hub
+if rank == 0:
+    print(f'Loading training dataset from Hugging Face: {train_dataset_hf_id}', '\n')
+
+train_dataset = StreamingTrainingHuggingFace(
+    dataset_id=train_dataset_hf_id, 
+    tokenizer=tokenizer, 
+    label_name=train_dataset_label, 
+    train_length=max_length, 
+    num_data=max_steps * batch_size, 
+    seed=seed,
+    split='train',
+    streaming=True,
+    cache_dir=cache_dir,
+    dataset_ckpt_path=load_path
+)
 valid_dataset = EvaluatingDataset(dataset=valid_dataset, tokenizer=tokenizer, 
                                   label_name=valid_dataset_label, valid_length=max_length)
 
@@ -194,7 +207,7 @@ os.environ["WANDB_DIR"] = f"{root}/wandb"
 
 training_args = TrainingArguments(
     report_to='wandb', logging_dir=f'{root}/wandb',
-    run_name=f'{save_abbr}-lctx-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
+    run_name=f'{save_abbr}-ckpt{load_ckpt}-decay-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
     include_for_metrics='loss', deepspeed=ds_config, **train_args
 )
 
