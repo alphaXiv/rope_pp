@@ -2,7 +2,11 @@ import os
 import sys
 import json
 import random
+import logging
 from datetime import datetime
+
+# Suppress transformers default logging output to console
+logging.getLogger("transformers.trainer").setLevel(logging.WARNING)
 
 # Add the current directory to sys.path to allow imports from sibling directories
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -78,7 +82,7 @@ max_length = 4096  # If still OOM, try 2048 or 3072
 valid_size = 4096  # Reduced validation size
 
 max_steps = 100000
-eval_steps = 10
+eval_steps = 1
 warmup_steps = 10
 
 save_steps = 10000
@@ -110,10 +114,11 @@ train_args = {
 
     'label_names': [], 'output_dir': f'{root}/checkpoints/{save_abbr}', 
     'eval_strategy': 'steps', 'eval_steps': eval_steps, 
-    'logging_strategy': 'steps', 'logging_steps': 1, 
+    'logging_strategy': 'steps', 'logging_steps': 1,
     'save_strategy': 'steps', 'save_steps': save_steps, 
     'gradient_accumulation_steps': gradient_accumulation_steps, 
     'max_steps': max_steps, 'disable_tqdm': True, 'save_only_model': True,
+    'logging_first_step': False,  # Don't log the first step
     'dataloader_num_workers': 2,  # Reduced workers to save memory
     'dataloader_pin_memory': False,  # Disable pin memory to save RAM
     'max_grad_norm': 1.0,  # Gradient clipping
@@ -121,20 +126,18 @@ train_args = {
 
 print(f'{config = }', '\n')
 print('train_args = ', json.dumps(train_args, indent=2), '\n')
-print('model is ready !', '\n')
-print('save ckpt at', sorted(list(range(0, max_steps, save_steps))[1:] + steps_to_save),'\n')
 
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=False)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.pad_token_id = tokenizer.eos_token_id
-
-print('tokenizer is ready !', '\n')
 
 # Load validation dataset from Hugging Face Hub
 print(f'Loading validation dataset from Hugging Face: {valid_dataset_hf_id}/{valid_dataset_name}', '\n')
 
 valid_dataset = datasets.load_dataset(valid_dataset_hf_id, valid_dataset_name, split=valid_dataset_split, 
                                       cache_dir=cache_dir)
+# wikitext has a lot of empty lines -> causes NaNs                                      
+valid_dataset = valid_dataset.filter(lambda x: len(x[valid_dataset_label].strip()) > 50)
 valid_dataset = valid_dataset.select(range(min(valid_size, len(valid_dataset))))
 
 print(valid_dataset, '\n')
@@ -164,7 +167,8 @@ os.environ["WANDB_PROJECT"] = "rope_pp"
 os.environ["WANDB_DIR"] = f"{root}/wandb"
 
 training_args = TrainingArguments(
-    report_to='wandb', logging_dir=f'{root}/wandb',
+    report_to='wandb',  # Keep WandB logging
+    logging_dir=f'{root}/wandb',
     run_name=f'{save_abbr}-single-gpu-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
     include_for_metrics='loss', **train_args
 )
@@ -182,11 +186,44 @@ trainer = TrainerWithDatasetCheckpointing(
                                      max_length=max_length, 
                                      world_size=1, 
                                      valid_dataset_abbr=valid_dataset_abbr, 
-                                     logging_steps=20)
+                                     logging_steps=1)
                 ], 
 )
 
+# Remove default progress callback that prints JSON logs
+from transformers.trainer_callback import PrinterCallback
+trainer.remove_callback(PrinterCallback)
+
 trainer.can_return_loss = True
+
+# Pre-training evaluation check to debug eval loss issues
+print("\n" + "="*60)
+print("Running pre-training evaluation check...")
+print("="*60)
+model.eval()
+eval_dataloader = trainer.get_eval_dataloader(trainer.eval_dataset[valid_dataset_abbr])
+batch = next(iter(eval_dataloader))
+batch = {k: v.to(model.device) for k, v in batch.items()}
+
+print(f"Batch keys: {batch.keys()}")
+print(f"Input shape: {batch['input_ids'].shape}")
+if 'labels' in batch:
+    print(f"Labels shape: {batch['labels'].shape}")
+    print(f"Labels min/max: {batch['labels'].min()}/{batch['labels'].max()}")
+
+with torch.no_grad():
+    outputs = model(**batch)
+    print(f"\nEval Loss: {outputs.loss}")
+    print(f"Loss is NaN: {torch.isnan(outputs.loss)}")
+    print(f"Loss is Inf: {torch.isinf(outputs.loss)}")
+    print(f"Logits shape: {outputs.logits.shape}")
+    print(f"Logits has NaN: {torch.isnan(outputs.logits).any()}")
+    print(f"Logits has Inf: {torch.isinf(outputs.logits).any()}")
+    print(f"Logits min/max: {outputs.logits.min()}/{outputs.logits.max()}")
+
+print("="*60)
+print("Starting training...\n")
+model.train()
 
 trainer.train()
 

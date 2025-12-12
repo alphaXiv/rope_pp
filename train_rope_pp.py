@@ -145,15 +145,10 @@ train_args = {
 if rank == 0:
     print(f'{config = }', '\n')
     print('train_args = ', json.dumps(train_args, indent=2), '\n')
-    print('model is ready !', '\n')
-    print('save ckpt at', sorted(list(range(0, max_steps, save_steps))[1:] + steps_to_save),'\n')
 
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=False)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.pad_token_id = tokenizer.eos_token_id
-
-if rank == 0:
-    print('tokenizer is ready !', '\n')
 
 # Load validation dataset from Hugging Face Hub
 if rank == 0:

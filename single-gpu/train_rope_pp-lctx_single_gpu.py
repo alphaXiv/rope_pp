@@ -2,7 +2,11 @@ import os
 import sys
 import json
 import random
+import logging
 from datetime import datetime
+
+# Suppress transformers default logging output to console
+logging.getLogger("transformers.trainer").setLevel(logging.WARNING)
 
 # Add the parent directory to sys.path to allow imports from sibling directories
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -116,10 +120,11 @@ train_args = {
 
     'label_names': [], 'output_dir': save_path, 
     'eval_strategy': 'steps', 'eval_steps': eval_steps, 
-    'logging_strategy': 'steps', 'logging_steps': 1, 
+    'logging_strategy': 'steps', 'logging_steps': 1,
     'save_strategy': 'steps', 'save_steps': save_steps, 
     'gradient_accumulation_steps': gradient_accumulation_steps, 
     'max_steps': max_steps, 'disable_tqdm': True, 'save_only_model': True,
+    'logging_first_step': False,  # Don't log the first step
     'dataloader_num_workers': 2,  # Reduced workers to save memory
     'dataloader_pin_memory': False,  # Disable pin memory to save RAM
     'max_grad_norm': 1.0,  # Gradient clipping
@@ -170,7 +175,8 @@ os.environ["WANDB_PROJECT"] = "rope_pp"
 os.environ["WANDB_DIR"] = f"{root}/wandb"
 
 training_args = TrainingArguments(
-    report_to='wandb', logging_dir=f'{root}/wandb',
+    report_to='wandb',  # Keep WandB logging
+    logging_dir=f'{root}/wandb',
     run_name=f'{save_abbr}-lctx-single-gpu-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
     include_for_metrics='loss', **train_args
 )
@@ -188,9 +194,13 @@ trainer = TrainerWithDatasetCheckpointing(
                                      max_length=max_length, 
                                      world_size=1, 
                                      valid_dataset_abbr=valid_dataset_abbr, 
-                                     logging_steps=20)
+                                     logging_steps=1)
                 ], 
 )
+
+# Remove default progress callback that prints JSON logs
+from transformers.trainer_callback import PrinterCallback
+trainer.remove_callback(PrinterCallback)
 
 trainer.can_return_loss = True
 
