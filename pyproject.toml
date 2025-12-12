@@ -13,6 +13,9 @@ dependencies = [
     "zstandard",
     "accelerate>=0.26.0",
     "deepspeed",
+    "lm-eval",
+    "wonderwords",
+    "nltk",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +43,7 @@ torch = [
 flash-attn = [
     { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.5.4/flash_attn-2.8.3+cu128torch2.8-cp312-cp312-linux_x86_64.whl", extra = "gpu" },
 ]
+lm-eval = { git = "https://github.com/EleutherAI/lm-evaluation-harness.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

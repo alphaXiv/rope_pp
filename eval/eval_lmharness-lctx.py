@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Evaluation script for RoPE++ and FoPE models using lm-evaluation-harness.
-Evaluates models on multiple reasoning and QA tasks without requiring opencompass integration.
+Evaluates models on long-context benchmarks without requiring opencompass integration.
 
 Supports:
 - RoPE++ models (with various rope configurations)
@@ -10,11 +10,7 @@ Supports:
 - ALiBi models (Attention with Linear Biases)
 
 Tasks evaluated:
-- PIQA: Physical commonsense reasoning
-- Winogrande: Commonsense reasoning with pronoun resolution
-- HellaSwag: Commonsense natural language inference
-- TruthfulQA (MC2): Truthfulness evaluation
-- ARC Easy: Grade-school science questions
+- BABILong: Long-context reasoning benchmark
 """
 
 import sys
@@ -66,8 +62,9 @@ def load_ropepp_model(model_path, rope_config, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -105,8 +102,9 @@ def load_fope_model(model_path, rope_config=None, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -138,8 +136,9 @@ def load_pythia_model(model_path, rope_config=None, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -171,8 +170,9 @@ def load_alibi_model(model_path, rope_config=None, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -182,17 +182,17 @@ def load_alibi_model(model_path, rope_config=None, device="cuda"):
     return model, tokenizer
 
 
-def evaluate_model(model_name, model_path, rope_config, model_type="ropepp", max_seq_len=2048, batch_size=16):
+def evaluate_model(model_name, model_path, rope_config, model_type="ropepp", max_seq_len=32768, batch_size=1):
     """
-    Evaluate a single model on PIQA.
+    Evaluate a single model on BABILong benchmarks.
     
     Args:
         model_name: Name for logging/results
         model_path: HuggingFace model path
         rope_config: RoPE configuration dict
         model_type: Type of model - "ropepp", "fope", "pythia", or "alibi"
-        max_seq_len: Maximum sequence length
-        batch_size: Batch size for evaluation
+        max_seq_len: Maximum sequence length (default 32768 for long-context tasks)
+        batch_size: Batch size for evaluation (default 1 for long sequences)
     
     Returns:
         Results dictionary
@@ -224,10 +224,11 @@ def evaluate_model(model_name, model_path, rope_config, model_type="ropepp", max
     # Run evaluation
     results = simple_evaluate(
         model=lm_eval_model,
-        tasks=["piqa", "winogrande", "hellaswag", "truthfulqa_mc2", "arc_easy"],
+        tasks=["babilong"],
         batch_size=batch_size,
         log_samples=False,
-        verbosity="INFO"
+        verbosity="INFO",
+        metadata={"pretrained": model_path, "tokenizer": model_path}
     )
     
     # Clean up
@@ -242,38 +243,13 @@ def main():
     # Define models to evaluate
     # Format: (name, path, rope_config, model_type, max_out_len)
     models = [
-        # FoPE models
-        ('FoPE-DCLM-376M-4k', 'SII-xrliu/FoPE-DCLM-376M-4k', {}, 'fope', 64), 
-        ('FoPE-DCLM-776M-4k', 'SII-xrliu/FoPE-DCLM-776M-4k', {}, 'fope', 64), 
-        
-        # Pythia models
-        ('Pythia-DCLM-376M-4k', 'SII-xrliu/Pythia-DCLM-376M-4k', {}, 'pythia', 64),
-        ('Pythia-DCLM-776M-4k', 'SII-xrliu/Pythia-DCLM-776M-4k', {}, 'pythia', 64),
-        
-        # ALiBi models
-        ('ALiBi-DCLM-376M-4k', 'SII-xrliu/ALiBi-DCLM-376M-4k', {}, 'alibi', 64),
-        ('ALiBi-DCLM-776M-4k', 'SII-xrliu/ALiBi-DCLM-776M-4k', {}, 'alibi', 64),
-        
-        # RoPE baseline and RoPE++ models
-        ('RoPE-DCLM-376M-4k', 'SII-xrliu/RoPE-DCLM-376M-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        ('RoPEPP_EH-DCLM-376M-4k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        ('RoPEPP_EC-DCLM-376M-4k', 'SII-xrliu/RoPEPP_EC-DCLM-376M-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
-
         # ('RoPE-DCLM-376M-32k', 'SII-xrliu/RoPE-DCLM-376M-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+        ('RoPEPP_EH-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
         # ('RoPEPP_EC-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EC-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
-
-        # ('RoPE-DCLM-776M-4k', 'SII-xrliu/RoPE-DCLM-776M-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-776M-4k', 'SII-xrliu/RoPEPP_EH-DCLM-776M-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-776M-4k', 'SII-xrliu/RoPEPP_EC-DCLM-776M-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
         # ('RoPE-DCLM-776M-32k', 'SII-xrliu/RoPE-DCLM-776M-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
         # ('RoPEPP_EH-DCLM-776M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-776M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
         # ('RoPEPP_EC-DCLM-776M-32k', 'SII-xrliu/RoPEPP_EC-DCLM-776M-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
-
-        # ('RoPE-DCLM-1_5B-4k', 'SII-xrliu/RoPE-DCLM-1_5B-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-1_5B-4k', 'SII-xrliu/RoPEPP_EH-DCLM-1_5B-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-1_5B-4k', 'SII-xrliu/RoPEPP_EC-DCLM-1_5B-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
         # ('RoPE-DCLM-1_5B-32k', 'SII-xrliu/RoPE-DCLM-1_5B-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
         # ('RoPEPP_EH-DCLM-1_5B-32k', 'SII-xrliu/RoPEPP_EH-DCLM-1_5B-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
@@ -289,8 +265,8 @@ def main():
                 model_path=model_path,
                 rope_config=rope_config,
                 model_type=model_type,
-                max_seq_len=2048,
-                batch_size=128
+                max_seq_len=32768,
+                batch_size=64
             )
             
             # Store results
@@ -299,38 +275,11 @@ def main():
             # Print results for this model
             print(f"\n{model_name} Results:")
             
-            # PIQA results
-            if 'piqa' in results['results']:
-                piqa_results = results['results']['piqa']
-                acc = piqa_results.get('acc,none', piqa_results.get('acc', 0))
-                acc_norm = piqa_results.get('acc_norm,none', piqa_results.get('acc_norm', 0))
-                print(f"  PIQA - Accuracy: {acc:.4f}, Acc (norm): {acc_norm:.4f}")
-            
-            # Winogrande results
-            if 'winogrande' in results['results']:
-                wino_results = results['results']['winogrande']
-                acc = wino_results.get('acc,none', wino_results.get('acc', 0))
-                print(f"  Winogrande - Accuracy: {acc:.4f}")
-            
-            # HellaSwag results
-            if 'hellaswag' in results['results']:
-                hella_results = results['results']['hellaswag']
-                acc = hella_results.get('acc,none', hella_results.get('acc', 0))
-                acc_norm = hella_results.get('acc_norm,none', hella_results.get('acc_norm', 0))
-                print(f"  HellaSwag - Accuracy: {acc:.4f}, Acc (norm): {acc_norm:.4f}")
-            
-            # TruthfulQA MC2 results
-            if 'truthfulqa_mc2' in results['results']:
-                truth_results = results['results']['truthfulqa_mc2']
-                acc = truth_results.get('acc,none', truth_results.get('acc', 0))
-                print(f"  TruthfulQA MC2 - Accuracy: {acc:.4f}")
-            
-            # ARC Easy results
-            if 'arc_easy' in results['results']:
-                arc_results = results['results']['arc_easy']
-                acc = arc_results.get('acc,none', arc_results.get('acc', 0))
-                acc_norm = arc_results.get('acc_norm,none', arc_results.get('acc_norm', 0))
-                print(f"  ARC Easy - Accuracy: {acc:.4f}, Acc (norm): {acc_norm:.4f}")
+            # BABILong results
+            if 'babilong' in results['results']:
+                babilong_results = results['results']['babilong']
+                acc = babilong_results.get('acc,none', babilong_results.get('acc', 0))
+                print(f"  BABILong - Accuracy: {acc:.4f}")
             
         except Exception as e:
             print(f"\nError evaluating {model_name}: {e}")
@@ -343,22 +292,18 @@ def main():
     print("SUMMARY OF ALL RESULTS")
     print(f"{'='*80}\n")
     
-    print(f"{'Model':<40} {'PIQA':<8} {'Wino':<8} {'Hella':<8} {'Truth':<8} {'ARC-E':<8}")
+    print(f"{'Model':<40} {'BABILong':<12}")
     print("-" * 80)
     
     for model_name, result in all_results.items():
         if "error" in result:
             print(f"{model_name:<40} ERROR: {result['error']}")
         else:
-            # Extract all metrics (using acc,none or acc)
-            piqa_acc = result.get('piqa', {}).get('acc,none', result.get('piqa', {}).get('acc', 0))
-            wino_acc = result.get('winogrande', {}).get('acc,none', result.get('winogrande', {}).get('acc', 0))
-            hella_acc = result.get('hellaswag', {}).get('acc_norm,none', result.get('hellaswag', {}).get('acc_norm', 0))
-            truth_acc = result.get('truthfulqa_mc2', {}).get('acc,none', result.get('truthfulqa_mc2', {}).get('acc', 0))
-            arc_acc = result.get('arc_easy', {}).get('acc,none', result.get('arc_easy', {}).get('acc', 0))
-            
-            print(f"{model_name:<40} {piqa_acc:.4f}   {wino_acc:.4f}   {hella_acc:.4f}   {truth_acc:.4f}   {arc_acc:.4f}")
-    
+            # Extract metrics
+            babilong_acc = result.get('babilong', {}).get('acc,none', result.get('babilong', {}).get('acc', 0))
+
+            print(f"{model_name:<40} {babilong_acc:.4f}")
+
     print("\n" + "="*80)
 
 
