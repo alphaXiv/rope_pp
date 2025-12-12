@@ -82,7 +82,7 @@ eval_steps = 10
 warmup_steps = 10
 
 save_steps = 10000
-steps_to_save = [2, max_steps]
+steps_to_save = [100, max_steps]
 
 # Load config and create model (NO DEEPSPEED)
 config = LlamaConfig.from_pretrained(config_path)
