@@ -7,6 +7,7 @@ Supports:
 - FoPE models (Functional Positional Encoding)
 - Pythia models (learned positional embeddings)
 - ALiBi models (Attention with Linear Biases)
+- Local checkpoints from training
 
 Tasks evaluated:
 - PIQA: Physical commonsense reasoning
@@ -19,6 +20,8 @@ Tasks evaluated:
 import sys
 import os
 import torch
+import json
+import argparse
 from pathlib import Path
 
 # Add rope_pp to path
@@ -36,37 +39,57 @@ from lm_eval import simple_evaluate
 from lm_eval.models.huggingface import HFLM
 
 
+def is_local_path(path):
+    """
+    Check if a path is a local filesystem path.
+    
+    Args:
+        path: Path string to check
+    
+    Returns:
+        True if path exists locally, False otherwise
+    """
+    return Path(path).exists()
+
+
 def load_ropepp_model(model_path, rope_config, device="cuda"):
     """
     Load a RoPE++ model with custom rope configuration.
     
     Args:
         model_path: HuggingFace model path or local path
-        rope_config: Dictionary with rope configuration (imag, imag_mode, etc.)
+        rope_config: Dictionary with rope configuration (for HF models only, ignored for local)
         device: Device to load model on
     
     Returns:
         Loaded model and tokenizer
     """
     print(f"Loading RoPE++ model: {model_path}")
-    print(f"RoPE config: {rope_config}")
     
-    # Load config and set rope_config
+    # Load config
     config = LlamaConfig.from_pretrained(model_path)
     config._attn_implementation = "flash_attention_2"
-    config.__setattr__("rope_config", rope_config)
+    
+    # For local checkpoints, rope_config is already in config.json
+    # For HuggingFace models, use the provided rope_config
+    if not is_local_path(model_path) and rope_config:
+        config.__setattr__("rope_config", rope_config)
+        print(f"Using provided RoPE config: {rope_config}")
+    elif hasattr(config, 'rope_config'):
+        print(f"Using RoPE config from checkpoint: {config.rope_config}")
     
     # Apply scaling factor if present
-    if 'scaling_factor' in rope_config:
-        config.rope_theta = config.rope_theta * rope_config['scaling_factor']
+    if hasattr(config, 'rope_config') and isinstance(config.rope_config, dict) and 'scaling_factor' in config.rope_config:
+        config.rope_theta = config.rope_theta * config.rope_config['scaling_factor']
     
     # Load model
     model = RoPEPPLlamaForCausalLM.from_pretrained(
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -104,8 +127,9 @@ def load_fope_model(model_path, rope_config=None, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -137,8 +161,9 @@ def load_pythia_model(model_path, rope_config=None, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -170,8 +195,9 @@ def load_alibi_model(model_path, rope_config=None, device="cuda"):
         model_path,
         config=config,
         torch_dtype=torch.float16,
-        trust_remote_code=True
-    ).to(device)
+        trust_remote_code=True,
+        device_map=device
+    )
     
     model.eval()
     
@@ -238,46 +264,134 @@ def evaluate_model(model_name, model_path, rope_config, model_type="ropepp", max
 
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Evaluate RoPE++ models and variants using lm-evaluation-harness'
+    )
+    parser.add_argument(
+        '--local-checkpoint',
+        type=str,
+        default=None,
+        help='Path to local checkpoint directory to evaluate (e.g., checkpoints/model/checkpoint-3)'
+    )
+    parser.add_argument(
+        '--model-name',
+        type=str,
+        default=None,
+        help='Display name for the local checkpoint (default: uses checkpoint path)'
+    )
+    parser.add_argument(
+        '--model-type',
+        type=str,
+        default='ropepp',
+        choices=['ropepp', 'fope', 'pythia', 'alibi'],
+        help='Type of model for local checkpoint (default: ropepp)'
+    )
+    parser.add_argument(
+        '--include-baselines',
+        action='store_true',
+        help='Also evaluate baseline HuggingFace models (default: only evaluate local checkpoint)'
+    )
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=128,
+        help='Batch size for evaluation (default: 128)'
+    )
+    parser.add_argument(
+        '--max-seq-len',
+        type=int,
+        default=2048,
+        help='Maximum sequence length (default: 2048)'
+    )
+    
+    args = parser.parse_args()
+    
     # Define models to evaluate
     # Format: (name, path, rope_config, model_type, max_out_len)
-    models = [
-        # FoPE models
-        ('FoPE-DCLM-376M-4k', 'SII-xrliu/FoPE-DCLM-376M-4k', {}, 'fope', 64), 
-        ('FoPE-DCLM-776M-4k', 'SII-xrliu/FoPE-DCLM-776M-4k', {}, 'fope', 64), 
+    models = []
+    
+    # Add local checkpoint if provided
+    if args.local_checkpoint:
+        checkpoint_path = args.local_checkpoint
         
-        # Pythia models
-        ('Pythia-DCLM-376M-4k', 'SII-xrliu/Pythia-DCLM-376M-4k', {}, 'pythia', 64),
-        ('Pythia-DCLM-776M-4k', 'SII-xrliu/Pythia-DCLM-776M-4k', {}, 'pythia', 64),
+        # Validate checkpoint exists
+        if not is_local_path(checkpoint_path):
+            print(f"ERROR: Local checkpoint not found: {checkpoint_path}")
+            sys.exit(1)
         
-        # ALiBi models
-        ('ALiBi-DCLM-376M-4k', 'SII-xrliu/ALiBi-DCLM-376M-4k', {}, 'alibi', 64),
-        ('ALiBi-DCLM-776M-4k', 'SII-xrliu/ALiBi-DCLM-776M-4k', {}, 'alibi', 64),
+        # Determine model name
+        if args.model_name:
+            model_name = args.model_name
+        else:
+            # Generate name from path
+            model_name = f"Local-{Path(checkpoint_path).parent.name}-{Path(checkpoint_path).name}"
         
-        # RoPE baseline and RoPE++ models
-        ('RoPE-DCLM-376M-4k', 'SII-xrliu/RoPE-DCLM-376M-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        ('RoPEPP_EH-DCLM-376M-4k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        ('RoPEPP_EC-DCLM-376M-4k', 'SII-xrliu/RoPEPP_EC-DCLM-376M-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
+        # For local checkpoints, rope_config will be loaded from config.json automatically
+        # So we pass an empty dict here
+        models.append((
+            model_name,
+            checkpoint_path,
+            {},  # rope_config loaded from checkpoint
+            args.model_type,
+            64  # max_out_len
+        ))
+        
+        print(f"\n{'='*80}")
+        print(f"Will evaluate local checkpoint: {checkpoint_path}")
+        print(f"Model name: {model_name}")
+        print(f"Model type: {args.model_type}")
+        print(f"Config will be loaded from checkpoint's config.json")
+        print(f"{'='*80}\n")
+    
+    # Add baseline models if requested
+    if args.include_baselines or not args.local_checkpoint:
+        # Evaluate a bunch of different embedding variants from: https://huggingface.co/collections/SII-xrliu/rope
+        # Uncomment as you wish!
+        baseline_models = [
+            # FoPE models
+            # ('FoPE-DCLM-376M-4k', 'SII-xrliu/FoPE-DCLM-376M-4k', {}, 'fope', 64), 
+            # ('FoPE-DCLM-776M-4k', 'SII-xrliu/FoPE-DCLM-776M-4k', {}, 'fope', 64), 
+            
+            # Pythia models
+            # ('Pythia-DCLM-376M-4k', 'SII-xrliu/Pythia-DCLM-376M-4k', {}, 'pythia', 64),
+            # ('Pythia-DCLM-776M-4k', 'SII-xrliu/Pythia-DCLM-776M-4k', {}, 'pythia', 64),
+            
+            # ALiBi models
+            # ('ALiBi-DCLM-376M-4k', 'SII-xrliu/ALiBi-DCLM-376M-4k', {}, 'alibi', 64),
+            # ('ALiBi-DCLM-776M-4k', 'SII-xrliu/ALiBi-DCLM-776M-4k', {}, 'alibi', 64),
+            
+            # RoPE baseline and RoPE++ models
+            # ('RoPE-DCLM-376M-4k', 'SII-xrliu/RoPE-DCLM-376M-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            ('RoPEPP_EH-DCLM-376M-4k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EC-DCLM-376M-4k', 'SII-xrliu/RoPEPP_EC-DCLM-376M-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
-        # ('RoPE-DCLM-376M-32k', 'SII-xrliu/RoPE-DCLM-376M-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EC-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
+            # ('RoPE-DCLM-376M-32k', 'SII-xrliu/RoPE-DCLM-376M-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EH-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EC-DCLM-376M-32k', 'SII-xrliu/RoPEPP_EC-DCLM-376M-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
-        # ('RoPE-DCLM-776M-4k', 'SII-xrliu/RoPE-DCLM-776M-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-776M-4k', 'SII-xrliu/RoPEPP_EH-DCLM-776M-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-776M-4k', 'SII-xrliu/RoPEPP_EC-DCLM-776M-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
+            # ('RoPE-DCLM-776M-4k', 'SII-xrliu/RoPE-DCLM-776M-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            ('RoPEPP_EH-DCLM-776M-4k', 'SII-xrliu/RoPEPP_EH-DCLM-776M-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EC-DCLM-776M-4k', 'SII-xrliu/RoPEPP_EC-DCLM-776M-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
-        # ('RoPE-DCLM-776M-32k', 'SII-xrliu/RoPE-DCLM-776M-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-776M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-776M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-776M-32k', 'SII-xrliu/RoPEPP_EC-DCLM-776M-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
+            # ('RoPE-DCLM-776M-32k', 'SII-xrliu/RoPE-DCLM-776M-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EH-DCLM-776M-32k', 'SII-xrliu/RoPEPP_EH-DCLM-776M-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EC-DCLM-776M-32k', 'SII-xrliu/RoPEPP_EC-DCLM-776M-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
-        # ('RoPE-DCLM-1_5B-4k', 'SII-xrliu/RoPE-DCLM-1_5B-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-1_5B-4k', 'SII-xrliu/RoPEPP_EH-DCLM-1_5B-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-1_5B-4k', 'SII-xrliu/RoPEPP_EC-DCLM-1_5B-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
+            # ('RoPE-DCLM-1_5B-4k', 'SII-xrliu/RoPE-DCLM-1_5B-4k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EH-DCLM-1_5B-4k', 'SII-xrliu/RoPEPP_EH-DCLM-1_5B-4k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EC-DCLM-1_5B-4k', 'SII-xrliu/RoPEPP_EC-DCLM-1_5B-4k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
 
-        # ('RoPE-DCLM-1_5B-32k', 'SII-xrliu/RoPE-DCLM-1_5B-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EH-DCLM-1_5B-32k', 'SII-xrliu/RoPEPP_EH-DCLM-1_5B-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
-        # ('RoPEPP_EC-DCLM-1_5B-32k', 'SII-xrliu/RoPEPP_EC-DCLM-1_5B-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
-    ]
+            # ('RoPE-DCLM-1_5B-32k', 'SII-xrliu/RoPE-DCLM-1_5B-32k', {'imag': False, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EH-DCLM-1_5B-32k', 'SII-xrliu/RoPEPP_EH-DCLM-1_5B-32k', {'imag': True, 'imag_mode': 'imag1'}, 'ropepp', 64), 
+            # ('RoPEPP_EC-DCLM-1_5B-32k', 'SII-xrliu/RoPEPP_EC-DCLM-1_5B-32k', {'imag': True, 'imag_mode': 'imag2'}, 'ropepp', 64), 
+        ]
+        models.extend(baseline_models)
+    
+    # Ensure we have at least one model to evaluate
+    if not models:
+        print("ERROR: No models to evaluate. Use --local-checkpoint or --include-baselines")
+        sys.exit(1)
     
     all_results = {}
     
@@ -288,8 +402,8 @@ def main():
                 model_path=model_path,
                 rope_config=rope_config,
                 model_type=model_type,
-                max_seq_len=2048,
-                batch_size=128
+                max_seq_len=args.max_seq_len,
+                batch_size=args.batch_size
             )
             
             # Store results

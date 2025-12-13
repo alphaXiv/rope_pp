@@ -1,5 +1,4 @@
 #!/bin/bash
-set -x
 
 # Check if HF_TOKEN is set
 if [ -z "$HF_TOKEN" ]; then
@@ -73,6 +72,23 @@ echo "Stage 2 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
 # Wait for stage 2 to complete
 wait
 
+
+# Stage 4: Model Evaluation with LM Harness
+echo "=========================================="
+echo "Starting Model Evaluation with LM Harness"
+echo "=========================================="
+
+# Evaluate the checkpoint after decay training
+python eval/eval_lmharness.py \
+  --local-checkpoint "checkpoints/${EXPERIMENT_NAME}-ckpt90000-decay/checkpoint-10000" \
+  --model-name "Local-RoPEPP-376M-After-Decay" \
+  --model-type "ropepp" \
+  --include-baselines
+
+echo "Evaluation (standard) complete!"
+
+wait
+
 # Stage 3: Long context training from checkpoint 10000
 echo "=========================================="
 echo "Starting Stage 3: Long Context Training"
@@ -88,12 +104,26 @@ deepspeed --master_port "$port" --include localhost:0,1,2,3,4,5,6,7 \
 
 echo "Stage 3 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"
 
+# Wait for stage 3 to complete
+wait
+
+# Stage 5: Model Evaluation with LM Harness (Long Context)
 echo "=========================================="
-echo "Training Complete!"
+echo "Starting Long Context Evaluation with LM Harness"
+echo "=========================================="
+
+# Evaluate the checkpoint after long context training
+python eval/eval_lmharness-lctx.py \
+  --local-checkpoint "checkpoints/${EXPERIMENT_NAME}-ckpt90000-decay-lctx/checkpoint-10000" \
+  --model-name "Local-RoPEPP-376M-After-LongContext" \
+  --model-type "ropepp" \
+  --include-baselines
+
+echo "Evaluation (long context) complete!"
+
+echo "=========================================="
+echo "Training and Evaluation Complete!"
 echo "=========================================="
 echo "Final model saved at: checkpoints/${EXPERIMENT_NAME}-ckpt90000-decay-lctx"
 echo ""
-echo "To monitor training progress, run:"
-echo "  tail -f logs/${EXPERIMENT_NAME}.log"
-echo "  tail -f logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
-echo "  tail -f logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"
+echo "Check the results directory for detailed evaluation outputs."

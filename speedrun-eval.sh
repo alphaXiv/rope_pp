@@ -1,5 +1,4 @@
 #!/bin/bash
-set -x
 
 # Check if HF_TOKEN is set
 if [ -z "$HF_TOKEN" ]; then
@@ -32,7 +31,16 @@ echo "=========================================="
 echo "Starting Model Evaluation with LM Harness"
 echo "=========================================="
 
-# Run the evaluation script
+# Run the standard evaluation script
+python eval/eval_lmharness.py
+
+echo "Evaluation (standard) complete!"
+
+echo "=========================================="
+echo "Starting Long Context Evaluation with LM Harness"
+echo "=========================================="
+
+# Run the long context evaluation script
 python eval/eval_lmharness-lctx.py
 
 echo "=========================================="

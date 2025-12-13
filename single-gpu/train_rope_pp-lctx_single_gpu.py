@@ -85,7 +85,7 @@ gradient_accumulation_steps = 8  # Simulate effective batch size of 16
 max_length = 32768
 valid_size = 16384
 
-max_steps = 10000
+max_steps = 100000
 eval_steps = 500
 warmup_steps = 500
 

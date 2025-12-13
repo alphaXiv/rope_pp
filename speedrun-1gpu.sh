@@ -1,5 +1,4 @@
 #!/bin/bash
-set -x
 
 # Check if HF_TOKEN is set
 if [ -z "$HF_TOKEN" ]; then
@@ -68,26 +67,20 @@ echo "Stage 2 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
 # Wait for stage 2 to complete
 wait
 
-# Stage 3: Long context training from checkpoint 10000
+# Stage 3: Model Evaluation with LM Harness
 echo "=========================================="
-echo "Starting Stage 3: Long Context Training"
+echo "Starting Model Evaluation with LM Harness"
 echo "=========================================="
 
-python single-gpu/train_rope_pp-lctx_single_gpu.py \
-  --config_abbr '376m' \
-  --imag \
-  --imag_mode 'imag2' \
-  --save_abbr "${EXPERIMENT_NAME}-ckpt90000-decay" \
-  --load_ckpt 10000
-
-echo "Stage 3 complete! Check logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"
+# Evaluate the trained checkpoint
+python eval/eval_lmharness.py \
+  --local-checkpoint "checkpoints/${EXPERIMENT_NAME}-ckpt90000-decay/checkpoint-10000" \
+  --model-name "Local-RoPEPP-376M-Trained" \
+  --model-type "ropepp" \
+  --include-baselines
 
 echo "=========================================="
-echo "Training Complete!"
+echo "Training and Evaluation Complete!"
 echo "=========================================="
-echo "Final model saved at: checkpoints/${EXPERIMENT_NAME}-ckpt90000-decay-lctx"
 echo ""
-echo "To monitor training progress, run:"
-echo "  tail -f logs/${EXPERIMENT_NAME}.log"
-echo "  tail -f logs/${EXPERIMENT_NAME}-ckpt90000-decay.log"
-echo "  tail -f logs/${EXPERIMENT_NAME}-ckpt90000-decay-lctx.log"
+echo "Check the results directory for detailed evaluation outputs."
